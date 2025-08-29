@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+
+apex/
+venv/
+.env
+assets/

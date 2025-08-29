@@ -1,0 +1,22 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
+*.whl
+.env.local
+.DS_Store
+*.tar.gz
+
+# git
+.git
+.gitignore
+
+# VS Code
+.vscode/
+
+apex/
+venv/
