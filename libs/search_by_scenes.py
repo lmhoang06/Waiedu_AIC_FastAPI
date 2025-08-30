@@ -8,6 +8,7 @@ _device = None
 _config = None
 _model = None
 _preprocess = None
+_dtype = None
 
 _init_done = False
 
@@ -17,16 +18,32 @@ def _init_sync(device: str = 'cpu'):
     """
     Synchronous initialization of model, preprocessor, and reranker.
     """
-    global _device, _config, _model, _preprocess, _init_done
+    global _device, _config, _model, _preprocess, _dtype, _init_done
     if not _init_done:
         _device = device
         path = "nvidia/Cosmos-Embed1-448p"
         _config = AutoConfig.from_pretrained(path, trust_remote_code=True)
         _model = AutoModel.from_pretrained(path, trust_remote_code=True, config=_config)
-        if _device != 'cpu':
-            _model = _model.to(_device, dtype=torch.float32)
-        _model.eval()
         
+        # Determine dtype based on device and CUDA compute capability
+        if _device == 'cpu':
+            _dtype = torch.float32
+        else:
+            torch_device = torch.device(_device)
+            if torch_device.type == 'cuda':
+                major, _ = torch.cuda.get_device_capability(torch_device)
+                if major >= 8:  # Ampere and newer support bfloat16
+                    _dtype = torch.bfloat16
+                else:
+                    _dtype = torch.float32
+            else:
+                _dtype = torch.float32  # Fallback for non-CUDA accelerators
+        
+        _model = _model.to(_device, dtype=_dtype)
+        _model.eval()
+
+        print("Cosmos-embed1 is initialized with dtype =", _dtype)
+
         from multiprocessing import set_start_method
         try:
             set_start_method("fork")
@@ -64,7 +81,7 @@ def search_by_scenes(
     collection.load()
 
     with torch.no_grad():
-        text_inputs = _preprocess(text=query).to(_device, dtype=torch.float32)
+        text_inputs = _preprocess(text=query).to(_device, dtype=_dtype)
         query_vector = _model.get_text_embeddings(**text_inputs).text_proj.cpu().numpy()
 
     search_params = {
@@ -96,11 +113,12 @@ def _cleanup_sync():
     """
     Synchronous cleanup of model, preprocessor, and reranker.
     """
-    global _device, _config, _model, _preprocess, _init_done
+    global _device, _config, _model, _preprocess, _dtype, _init_done
     
     _model = None
     _preprocess = None
     _config = None
+    _dtype = None
 
     if _device is not None and _device != 'cpu':
         try:
