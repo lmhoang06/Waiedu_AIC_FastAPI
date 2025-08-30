@@ -86,6 +86,9 @@ def search_by_scenes(
 
     search_params = {
         "metric_type": "COSINE",
+        "params": {
+            "ef": 4 * top_k
+        }
     }
 
     result = collection.search(
