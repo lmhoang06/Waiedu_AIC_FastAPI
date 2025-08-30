@@ -92,7 +92,7 @@ def search_by_scenes(
         data=query_vector,
         anns_field="cosmos_embed_vector",
         param=search_params,
-        limit=2 * top_k,
+        limit=top_k,
         output_fields=["scene_id", "keyframes", "start_frame", "end_frame"]
     )[0]
 
