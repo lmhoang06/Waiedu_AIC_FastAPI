@@ -8,6 +8,7 @@ import time
 _reranker = None
 _embedding_llama_server_url = "http://localhost:8080/embedding"
 _init_done = False
+_collection = None
 
 COLLECTION_NAME = 'asr'
 RRF_K = 70  # Reciprocal Rank Fusion parameter
@@ -99,10 +100,15 @@ def _init_sync(embedding_llama_server_url: str = "http://localhost:8080/embeddin
     """
     Synchronous initialization of embedding function and reranker.
     """
-    global _reranker, _init_done, _embedding_llama_server_url
+    global _reranker, _init_done, _embedding_llama_server_url, _collection
     if not _init_done:
+        if not utility.has_collection(COLLECTION_NAME):
+            raise ValueError(f"Collection '{COLLECTION_NAME}' does not exist.")
+        
         _reranker = RRFRanker(RRF_K)
         _embedding_llama_server_url = embedding_llama_server_url
+        _collection = Collection(COLLECTION_NAME)
+        _collection.load()
         _init_done = True
 
 async def init(embedding_llama_server_url: str = "http://localhost:8080/embedding"):
@@ -114,6 +120,7 @@ async def init(embedding_llama_server_url: str = "http://localhost:8080/embeddin
 def search_by_asr(
     query: str,
     top_k: int = 100,
+    subset: list[str] = None
 ):
     assert isinstance(query, str), "Query must be a string"
     assert isinstance(top_k, int) and top_k > 0, "top_k must be a positive integer"
@@ -124,15 +131,20 @@ def search_by_asr(
     
     if not query:
         raise ValueError("Query cannot be empty.")
-    
-    # Initialization is handled at startup; no blocking init here
-    if not utility.has_collection(COLLECTION_NAME):
-        raise ValueError(f"Collection '{COLLECTION_NAME}' does not exist.")
-    
-    collection = Collection(COLLECTION_NAME)
-    collection.load()
 
     query_vector = encode_queries([query])
+
+    # Build filter expression if subset is provided
+    filter_expr = None
+    if subset is not None and len(subset) > 0:
+        # Create filter conditions for ids starting with any value in subset
+        # Milvus supports LIKE operator for string pattern matching
+        conditions = []
+        for prefix in subset:
+            # Escape double quotes in prefix to prevent issues
+            escaped_prefix = prefix.replace('"', '\\"')
+            conditions.append(f'audio_segment_id LIKE "{escaped_prefix}%"')
+        filter_expr = " OR ".join(conditions)
 
     dense_search_params = {
         "data": query_vector,
@@ -140,8 +152,12 @@ def search_by_asr(
         "param": {
             "ef": 4 * top_k,
         },
-        "limit": 4 * top_k,
+        "limit": top_k,
     }
+    
+    # Add filter expression if provided
+    if filter_expr:
+        dense_search_params["expr"] = filter_expr
 
     dense_request = AnnSearchRequest(**dense_search_params)
 
@@ -151,19 +167,21 @@ def search_by_asr(
         "param": {
             "drop_ratio_search": 0.2
         },
-        "limit": 4 * top_k,
+        "limit": top_k,
     }
+    
+    # Add filter expression if provided
+    if filter_expr:
+        sparse_search_params["expr"] = filter_expr
 
     sparse_request = AnnSearchRequest(**sparse_search_params)
 
-    result = collection.hybrid_search(
+    result = _collection.hybrid_search(
         reqs=[dense_request, sparse_request],
         rerank=_reranker,
-        limit=2 * top_k,
+        limit=top_k,
         output_fields=["audio_segment_id", "keyframes"]
     )[0]
-
-    collection.release()
 
     # collect keyframe+distance pairs
     keyframes_list: list[tuple[str, float]] = []
@@ -202,9 +220,11 @@ def _cleanup_sync():
     """
     Synchronous cleanup of embedding function and reranker.
     """
-    global _reranker, _init_done
+    global _reranker, _init_done, _collection
     # Dereference resources
     _reranker = None
+    _collection.release()
+    _collection = None
     _init_done = False
 
 async def shutdown():

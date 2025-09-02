@@ -9,6 +9,7 @@ _config = None
 _model = None
 _preprocess = None
 _dtype = None
+_collection = None
 
 _init_done = False
 
@@ -18,8 +19,11 @@ def _init_sync(device: str = 'cpu'):
     """
     Synchronous initialization of model, preprocessor, and reranker.
     """
-    global _device, _config, _model, _preprocess, _dtype, _init_done
+    global _device, _config, _model, _preprocess, _dtype, _init_done, _collection
     if not _init_done:
+        if not utility.has_collection(COLLECTION_NAME):
+            raise Exception(f"Collection '{COLLECTION_NAME}' does not exist. Please create it first.")
+
         _device = device
         path = "nvidia/Cosmos-Embed1-448p"
         _config = AutoConfig.from_pretrained(path, trust_remote_code=True)
@@ -62,6 +66,7 @@ async def init(device: str = 'cpu'):
 def search_by_scenes(
     query: str,
     top_k: int = 100,
+    subset: list[str] = None
 ):
     assert isinstance(query, str), "Query must be a string"
     assert isinstance(top_k, int) and top_k > 0, "top_k must be a positive integer"
@@ -72,13 +77,18 @@ def search_by_scenes(
     
     if not query:
         raise ValueError("Query cannot be empty.")
-    
-    # Assuming initialization done at startup; no sync init call here
-    if not utility.has_collection(COLLECTION_NAME):
-        raise ValueError(f"Collection '{COLLECTION_NAME}' does not exist.")
-    
-    collection = Collection(COLLECTION_NAME)
-    collection.load()
+
+    # Build filter expression if subset is provided
+    filter_expr = None
+    if subset is not None and len(subset) > 0:
+        # Create filter conditions for ids starting with any value in subset
+        # Milvus supports LIKE operator for string pattern matching
+        conditions = []
+        for prefix in subset:
+            # Escape double quotes in prefix to prevent issues
+            escaped_prefix = prefix.replace('"', '\\"')
+            conditions.append(f'scene_id LIKE "{escaped_prefix}%"')
+        filter_expr = " OR ".join(conditions)
 
     with torch.no_grad():
         text_inputs = _preprocess(text=query).to(_device, dtype=_dtype)
@@ -91,15 +101,14 @@ def search_by_scenes(
         }
     }
 
-    result = collection.search(
+    result = _collection.search(
         data=query_vector,
         anns_field="cosmos_embed_vector",
         param=search_params,
         limit=top_k,
-        output_fields=["scene_id", "keyframes", "start_frame", "end_frame"]
+        output_fields=["scene_id", "keyframes", "start_frame", "end_frame"],
+        expr=filter_expr
     )[0]
-
-    collection.release()
 
     keyframes_list: list[tuple[str, float]] = []
     for res in result:
@@ -116,7 +125,7 @@ def _cleanup_sync():
     """
     Synchronous cleanup of model, preprocessor, and reranker.
     """
-    global _device, _config, _model, _preprocess, _dtype, _init_done
+    global _device, _config, _model, _preprocess, _dtype, _init_done, _collection
     
     _model = None
     _preprocess = None
@@ -129,6 +138,8 @@ def _cleanup_sync():
         except Exception:
             pass
     _device = None
+    _collection.release()
+    _collection = None
     _init_done = False
 
 async def shutdown():

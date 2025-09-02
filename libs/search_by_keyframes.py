@@ -9,6 +9,7 @@ _device = None
 _model = None
 _tokenizer = None
 _init_done = False
+_collection = None
 
 COLLECTION_NAME = 'keyframes'
 
@@ -19,9 +20,14 @@ def _init_sync(device: str = 'cpu'):
     """
     Synchronous initialization of model, preprocessor, and reranker.
     """
-    global _device, _model, _tokenizer, _init_done
+    global _device, _model, _tokenizer, _init_done, _collection
     if not _init_done:
+        if not utility.has_collection(COLLECTION_NAME):
+            raise Exception(f"Collection '{COLLECTION_NAME}' does not exist. Please create it first.")
+
         _device = device
+        _collection = Collection(COLLECTION_NAME)
+        _collection.load()
 
         _model = create_model(MODEL_NAME, PATH_TO_WEIGHT, force_custom_clip=True)
         if _device != 'cpu':
@@ -41,7 +47,8 @@ async def init(device: str = 'cpu'):
 def search_by_keyframes(
     image_id_query=None,
     text_query=None,
-    top_k=5
+    top_k=5,
+    subset: list[str] = None
 ):
     """
     Searches for keyframes in the Milvus collection.
@@ -50,26 +57,32 @@ def search_by_keyframes(
         image_id_query (str): The ID of the image to search for.
         text_query (str): The text query to search for.
         top_k (int): The maximum number of results to return.
-
+        subset (list[str]): The subset of keyframes to search for.
     Returns:
         A list of dictionaries containing the search results.
         Returns an error message if the collection doesn't exist.
     """
-    if not utility.has_collection(COLLECTION_NAME):
-        raise Exception(f"Collection '{COLLECTION_NAME}' does not exist. Please create it first.")
-    
     if not _init_done:
         raise RuntimeError("Model is not initialized. Call init() before using search_keyframes.")
 
-    collection = Collection(COLLECTION_NAME)
-    collection.load()
+    # Build filter expression if subset is provided
+    filter_expr = None
+    if subset is not None and len(subset) > 0:
+        # Create filter conditions for ids starting with any value in subset
+        # Milvus supports LIKE operator for string pattern matching
+        conditions = []
+        for prefix in subset:
+            # Escape double quotes in prefix to prevent issues
+            escaped_prefix = prefix.replace('"', '\\"')
+            conditions.append(f'keyframe_id LIKE "{escaped_prefix}%"')
+        filter_expr = " OR ".join(conditions)
 
     nprobe = None
 
     if top_k <= 256:
-        nprobe = 8
-    elif top_k <= 512:
         nprobe = 16
+    elif top_k <= 512:
+        nprobe = 20
     else :
         nprobe = 32
 
@@ -83,7 +96,7 @@ def search_by_keyframes(
     with torch.no_grad(), torch.amp.autocast(_device):
         if image_id_query:
             """For KNN query"""
-            _res = collection.query(
+            _res = _collection.query(
                 expr=f"keyframe_id == '{image_id_query}'",
                 limit=1,
                 output_fields=["eva_clip_vector"],
@@ -97,15 +110,14 @@ def search_by_keyframes(
         else:
             raise ValueError("Either image_id_query or text_query must be provided.")
         
-    result = collection.search(
+    result = _collection.search(
         data=query_vector,
         anns_field="eva_clip_vector",
         param=search_params,
         limit=top_k,
-        output_fields=["keyframe_id"]
+        output_fields=["keyframe_id"],
+        expr=filter_expr
     )[0]
-
-    collection.release()
 
     keyframes_list: list[tuple[str, float]] = []
     for res in result:
@@ -121,7 +133,7 @@ def _cleanup_sync():
     """
     Synchronous cleanup of model, preprocessor, and reranker.
     """
-    global _device, _model, _tokenizer, _init_done
+    global _device, _model, _tokenizer, _init_done, _collection
 
     _model = None
     _tokenizer = None
@@ -132,6 +144,8 @@ def _cleanup_sync():
         except Exception:
             pass
     _device = None
+    _collection.release()
+    _collection = None
     _init_done = False
 
 async def shutdown():

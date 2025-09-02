@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import torch
@@ -100,9 +100,14 @@ class SceneSearchRequest(BaseModel):
     top_k: int = Field(..., ge=16, description="Number of top results, minimum 16")
 
 @app.post("/scene_search")
-async def scene_search(request: SceneSearchRequest):
+async def scene_search(request: SceneSearchRequest, subset: Optional[str] = Query(None, description="Comma-separated list of ID prefixes to filter results")):
+    # Parse subset parameter if provided
+    subset_list = None
+    if subset:
+        subset_list = [s.strip() for s in subset.split(',') if s.strip()]
+    
     try:
-        results = search_by_scenes(request.query, request.top_k)
+        results = search_by_scenes(request.query, request.top_k, subset_list)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     keyframe_ids = [kf for kf, _ in results]
@@ -115,9 +120,14 @@ class AsrSearchRequest(BaseModel):
     top_k: int = Field(..., ge=16, description="Number of top results, minimum 16")
 
 @app.post("/asr_search")
-async def asr_search(request: AsrSearchRequest):
+async def asr_search(request: AsrSearchRequest, subset: Optional[str] = Query(None, description="Comma-separated list of ID prefixes to filter results")):
+    # Parse subset parameter if provided
+    subset_list = None
+    if subset:
+        subset_list = [s.strip() for s in subset.split(',') if s.strip()]
+    
     try:
-        results = search_by_asr(request.query, request.top_k)
+        results = search_by_asr(request.query, request.top_k, subset_list)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     keyframe_ids = [kf for kf, _ in results]
@@ -131,12 +141,17 @@ class KeyframeSearchRequest(BaseModel):
     top_k: int = Field(..., ge=16, description="Number of top results, minimum 16")
 
 @app.post("/keyframe_search")
-async def keyframe_search(request: KeyframeSearchRequest):
+async def keyframe_search(request: KeyframeSearchRequest, subset: Optional[str] = Query(None, description="Comma-separated list of ID prefixes to filter results")):
     if not request.image_id_query and not request.text_query:
         raise HTTPException(status_code=400, detail="Either image ID or text query must be provided.")
 
+    # Parse subset parameter if provided
+    subset_list = None
+    if subset:
+        subset_list = [s.strip() for s in subset.split(',') if s.strip()]
+
     try:
-        results = search_by_keyframes(request.image_id_query, request.text_query, request.top_k)
+        results = search_by_keyframes(request.image_id_query, request.text_query, request.top_k, subset_list)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     keyframe_ids = [kf for kf, _ in results]
@@ -148,7 +163,7 @@ class BulkSearchQuery(BaseModel):
     args: dict
 
 @app.post("/search")
-async def bulk_search(queries: List[BulkSearchQuery]):
+async def bulk_search(queries: List[BulkSearchQuery], subset: Optional[str] = Query(None, description="Comma-separated list of ID prefixes to filter results")):
     rrf_buckets: dict[str, list[int]] = {}
     fused_list: list[tuple[str, float]] = []
 
@@ -158,19 +173,24 @@ async def bulk_search(queries: List[BulkSearchQuery]):
         if qtype not in ['asr', 'scenes', 'keyframes']:
             raise HTTPException(status_code=400, detail=f"Unsupported search type: {qtype}")
 
+        # Parse subset parameter if provided
+        subset_list = None
+        if subset:
+            subset_list = [s.strip() for s in subset.split(',') if s.strip()]
+
         try:
             if qtype == 'asr':
                 req = AsrSearchRequest(**args)
-                res = search_by_asr(req.query, req.top_k)
+                res = search_by_asr(req.query, req.top_k, subset_list)
             elif qtype == 'scenes':
                 req = SceneSearchRequest(**args)
-                res = search_by_scenes(req.query, req.top_k)
+                res = search_by_scenes(req.query, req.top_k, subset_list)
             elif qtype == 'keyframes':
                 req = KeyframeSearchRequest(**args)
                 if not req.image_id_query and not req.text_query:
                     raise HTTPException(status_code=400, detail="Either image ID or text query must be provided.")
 
-                res = search_by_keyframes(req.image_id_query, req.text_query, req.top_k)
+                res = search_by_keyframes(req.image_id_query, req.text_query, req.top_k, subset_list)
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
         
