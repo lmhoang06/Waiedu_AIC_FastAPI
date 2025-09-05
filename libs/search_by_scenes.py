@@ -23,6 +23,9 @@ def _init_sync(device: str = 'cpu'):
     if not _init_done:
         if not utility.has_collection(COLLECTION_NAME):
             raise Exception(f"Collection '{COLLECTION_NAME}' does not exist. Please create it first.")
+        
+        _collection = Collection(COLLECTION_NAME)
+        _collection.load()
 
         _device = device
         path = "nvidia/Cosmos-Embed1-448p"
