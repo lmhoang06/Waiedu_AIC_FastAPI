@@ -85,7 +85,6 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Docker health checks."""
-    import torch
     return {
         "status": "healthy",
         "cuda_available": torch.cuda.is_available(),
