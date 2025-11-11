@@ -95,7 +95,7 @@ def search_by_scenes(
 
     with torch.no_grad():
         text_inputs = _preprocess(text=query).to(_device, dtype=_dtype)
-        query_vector = _model.get_text_embeddings(**text_inputs).text_proj.cpu().numpy()
+        query_vector = _model.get_text_embeddings(**text_inputs).text_proj.cpu().to(torch.float32).numpy()
 
     search_params = {
         "metric_type": "COSINE",
